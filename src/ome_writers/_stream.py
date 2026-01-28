@@ -3,15 +3,17 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+from ome_writers._frame_buffer import FrameBuffer
 from ome_writers._router import FrameRouter
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import numpy as np
 
     from ome_writers._backends._backend import ArrayBackend
     from ome_writers._schema import AcquisitionSettings, FileFormat
@@ -43,27 +45,50 @@ class OMEStream:
     ```
     """
 
-    def __init__(self, backend: ArrayBackend, router: FrameRouter) -> None:
+    def __init__(
+        self,
+        backend: ArrayBackend,
+        router: FrameRouter,
+        frame_shape: tuple[int, int],
+        dtype: np.dtype,
+    ) -> None:
         self._backend = backend
         self._router = router
         self._iterator = iter(router)
+        self._frame_buffer = FrameBuffer(frame_shape, dtype)
 
-    def append(self, frame: np.ndarray) -> None:
-        """Write the next frame in acquisition order.
+    def append(self, data: np.ndarray) -> None:
+        """Write frame data in acquisition order.
 
         Parameters
         ----------
-        frame : np.ndarray
-            2D array containing the frame data (Y, X).
+        data : np.ndarray
+            Frame data to write. Can be:
+            - A complete 2D frame with shape (Y, X) - written directly (fast path)
+            - Arbitrary bytes that will be accumulated into complete frames
 
         Raises
         ------
         StopIteration
             If all frames have been written (for finite dimensions only).
             For unlimited dimensions, never raises StopIteration.
+
+        Notes
+        -----
+        When data is not a complete frame, bytes are accumulated until complete
+        frames are available. This enables streaming of arbitrary byte chunks
+        that don't align to frame boundaries, matching acquire-zarr's behavior.
         """
-        pos_idx, idx = next(self._iterator)
-        self._backend.write(pos_idx, idx, frame)
+        # Fast path: data is already a complete frame
+        if data.shape == self._frame_buffer._frame_shape:
+            pos_idx, idx = next(self._iterator)
+            self._backend.write(pos_idx, idx, data)
+            return
+
+        # Slow path: accumulate bytes and write complete frames
+        for frame in self._frame_buffer.add_bytes(data):
+            pos_idx, idx = next(self._iterator)
+            self._backend.write(pos_idx, idx, frame)
 
     def get_metadata(self) -> Any:
         """Retrieve metadata from the backend.  Meaning is format-dependent."""
@@ -79,6 +104,12 @@ class OMEStream:
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         """Exit context manager, finalizing the backend."""
+        if self._frame_buffer.pending_bytes > 0:
+            warnings.warn(
+                f"Stream closed with {self._frame_buffer.pending_bytes} bytes of "
+                f"incomplete frame data. This data will be lost.",
+                stacklevel=2,
+            )
         self._backend.finalize()
 
 
@@ -224,7 +255,13 @@ def create_stream(settings: AcquisitionSettings) -> OMEStream:
     except Exception as e:  # pragma: no cover
         backend.finalize()
         raise RuntimeError(f"Unexpected error during backend preparation: {e}") from e
-    return OMEStream(backend, router)
+
+    # Extract frame shape and dtype for FrameBuffer
+    frame_dims = settings.frame_dimensions
+    frame_shape = (frame_dims[0].count, frame_dims[1].count)
+    dtype = np.dtype(settings.dtype)
+
+    return OMEStream(backend, router, frame_shape, dtype)
 
 
 def _create_backend(settings: AcquisitionSettings) -> ArrayBackend:

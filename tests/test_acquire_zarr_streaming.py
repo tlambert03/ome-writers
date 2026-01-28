@@ -5,22 +5,24 @@ import numpy as np
 import pytest
 
 from ome_writers._schema import AcquisitionSettings, Dimension
-from ome_writers._stream import create_stream
+from ome_writers._stream import AVAILABLE_BACKENDS, create_stream
 
-pytest.importorskip("acquire_zarr", reason="acquire-zarr not installed")
+# Collect available streaming-capable backends
+STREAMING_BACKENDS = [
+    name for name in ["acquire-zarr", "tensorstore"] if name in AVAILABLE_BACKENDS
+]
 
 
-def test_acquire_zarr_full_streaming_support(tmp_path: Path) -> None:
-    """Test that our backend abstraction doesn't break cool acquire-zarr features.
+@pytest.mark.parametrize("backend", STREAMING_BACKENDS)
+def test_arbitrary_byte_streaming(tmp_path: Path, backend: str) -> None:
+    """Test arbitrary byte streaming support for backends.
 
-    One very nice thing about acquire-zarr's stream is that it makes no assumptions
-    about shape of each buffer being passed to `stream.append()`,  C-contiguous
-    buffers are simply concatenated according to the dimensionality declared in
-    the settings.
+    This test ensures that backends can accept arbitrary byte chunks that don't
+    align to frame boundaries, matching acquire-zarr's native streaming behavior.
 
-    This test ensures that our backend abstraction preserves this behavior.
+    For acquire-zarr, this is native functionality.
+    For other backends (tensorstore, etc.), this is enabled via FrameBuffer.
     """
-
     settings = AcquisitionSettings(
         root_path=str(tmp_path / "output.zarr"),
         dimensions=[
@@ -29,7 +31,7 @@ def test_acquire_zarr_full_streaming_support(tmp_path: Path) -> None:
             Dimension(name="x", count=128, chunk_size=64, unit="um", scale=0.1),
         ],
         dtype="uint16",
-        backend="acquire-zarr",
+        backend=backend,
     )
 
     shape = tuple(d.count or 1 for d in settings.dimensions)
