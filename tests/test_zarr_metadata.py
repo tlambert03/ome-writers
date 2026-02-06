@@ -242,10 +242,15 @@ def test_channel_metadata_in_zarr(tmp_path: Path, zarr_backend: str) -> None:
 
     data = json.loads(Path(f"{settings.root_path}/zarr.json").read_text())
     ome = data["attributes"]["ome"]
+    assert "omero" in ome
+    assert "channels" in ome["omero"]
     channels = ome["omero"]["channels"]
-    channel_names = [ch["label"] for ch in channels]
+    assert all(ch.get("color") is not None for ch in channels)
+    assert all(ch.get("window") is not None for ch in channels)
+    channel_names = [ch.get("label") for ch in channels]
     assert channel_names == ["DAPI", "FITC"]
-    assert [ch.get("color") for ch in channels] == [None, "00FF00"]
+    # Note: colors default to white if not specified
+    assert [ch.get("color") for ch in channels] == ["FFFFFF", "00FF00"]
 
 
 def test_frame_metadata_single_position(tmp_path: Path) -> None:

@@ -4,19 +4,24 @@ import sys
 
 import numpy as np
 
-from ome_writers import AcquisitionSettings, Dimension, create_stream
+from ome_writers import AcquisitionSettings, Channel, Dimension, create_stream
 
 # Derive format/backend from command line argument (default: auto)
 FORMAT = "auto" if len(sys.argv) < 2 else sys.argv[1]
 UM = "micrometer"
 
 # create acquisition settings
+channels = [
+    Channel(name="DAPI", color="blue"),
+    Channel(name="FITC", color="green"),
+    Channel(name="Cy5", color="red"),
+]
 settings = AcquisitionSettings(
     root_path="example_5d_image",
     # declare dimensions in order of acquisition (slowest to fastest)
     dimensions=[
         Dimension(name="t", count=2, chunk_size=1, type="time"),
-        Dimension(name="c", count=3, chunk_size=1, type="channel"),
+        Dimension(name="c", chunk_size=1, type="channel", coords=channels),
         Dimension(name="z", count=4, chunk_size=1, type="space", scale=5, unit=UM),
         Dimension(name="y", count=256, chunk_size=64, type="space", scale=2, unit=UM),
         Dimension(name="x", count=256, chunk_size=64, type="space", scale=2, unit=UM),

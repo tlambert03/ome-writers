@@ -11,6 +11,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
+import numpy as np
+
 from ome_writers import __version__
 from ome_writers._backends._backend import ArrayBackend
 from ome_writers._backends._chunk_buffer import ChunkBuffer
@@ -30,7 +32,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import Protocol
 
-    import numpy as np
     from yaozarrs.write.v05._write import CompressionName
 
     from ome_writers._backends._backend import ArrayLike
@@ -124,7 +125,7 @@ class YaozarrsBackend(ArrayBackend, Generic[_AT]):
         # this single image model is reused for all positions
         # (the underlying assumption is that we currently don't support inhomogeneous
         # shapes/dtypes across positions)
-        image = _build_yaozarrs_image_model(storage_dims)
+        image = _build_yaozarrs_image_model(storage_dims, dtype)
 
         compression = cast("CompressionName", settings.compression or "none")
 
@@ -510,7 +511,7 @@ def _get_chunks_and_shards(
     return tuple(chunks), tuple(shards) if has_shards else None
 
 
-def _build_yaozarrs_image_model(dims: list[Dimension]) -> v05.Image:
+def _build_yaozarrs_image_model(dims: list[Dimension], dtype: str) -> v05.Image:
     """Build yaozarrs v05 Image metadata from Dimensions."""
     dim_specs = [
         DimSpec(
@@ -527,10 +528,21 @@ def _build_yaozarrs_image_model(dims: list[Dimension]) -> v05.Image:
     if channel_dim is not None and channel_dim.coords:
         omero_channels = []
         for c in channel_dim.coords:
+            # Default color to white if not specified
             color = (
-                c.color.as_hex(format="long").lstrip("#").upper() if c.color else None
+                c.color.as_hex(format="long").lstrip("#").upper()
+                if c.color
+                else "FFFFFF"
             )
-            omero_channels.append(v05.OmeroChannel(label=c.name, color=color))
+            # Default to full range window for the given dtype
+            dtype_min = np.iinfo(dtype).min
+            dtype_max = np.iinfo(dtype).max
+            window = v05.OmeroWindow(
+                min=dtype_min, max=dtype_max, start=dtype_min, end=dtype_max
+            )
+            omero_channels.append(
+                v05.OmeroChannel(label=c.name, color=color, window=window)
+            )
 
         omero = v05.Omero(channels=omero_channels)
     else:

@@ -54,7 +54,7 @@ jobs:
     needs: changes
     # skip on PRs that don't touch relevant files (CodSpeed partial runs
     # will fill in historical data for the missing benchmarks)
-    if: needs.changes.outputs.bench == 'true' || github.event_name != 'pull_request'
+    if: (needs.changes.outputs.bench == 'true' || github.event_name != 'pull_request') && (github.repository == 'pymmcore-plus/ome-writers')
     # using bare-metal runner for more consistent benchmark results
     # this has time limit
     runs-on: codspeed-macro

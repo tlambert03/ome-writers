@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import deprecated
 
-from ome_writers._schema import Dimension, Plate, Position, StandardAxis
+from ome_writers._schema import Channel, Dimension, Plate, Position, StandardAxis
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -111,6 +111,8 @@ def dims_from_useq(
                 dim.unit = "micrometer"
                 if hasattr(seq.z_plan, "step"):
                     dim.scale = seq.z_plan.step  # ty: ignore
+        if std_axis == StandardAxis.CHANNEL and seq.channels:
+            dim.coords = [Channel(name=c.config) for c in seq.channels]
         dims.append(dim)
 
     dims.extend(
