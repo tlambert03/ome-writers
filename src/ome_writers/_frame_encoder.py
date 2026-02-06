@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from ome_writers._array_view import create_array_view
 from ome_writers._router import FrameRouter
 from ome_writers._stream import create_stream
 
@@ -145,11 +146,10 @@ def write_encoded_data(
         settings, real_unbounded_count=real_unbounded_count, mode=mode
     )
     with create_stream(settings) as stream:
+        view = create_array_view(stream._backend, settings) if return_view else None
         for frame in frames:
             stream.append(frame)
-        if return_view:
-            return stream._backend.as_array_view()
-    return None
+    return view
 
 
 def validate_encoded_frame_values(

@@ -54,12 +54,24 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Any, Literal
+    from typing import Any, Literal, Protocol
 
     import numpy as np
 
+    from ome_writers._backends._backend import ArrayBackend
     from ome_writers._router import FrameRouter
     from ome_writers._schema import AcquisitionSettings
+
+    class ArrayLike(Protocol):
+        """Protocol for array-like objects supporting shape and indexing."""
+
+        @property
+        def shape(self) -> tuple[int, ...]: ...
+
+        def __getitem__(self, key: Any) -> Any: ...
+
+        @property
+        def dtype(self) -> Any: ...
 
 
 class ArrayBackend(ABC):
@@ -171,6 +183,16 @@ class ArrayBackend(ABC):
     # -------------------------------------------------------------------------
     # Optional hooks
     # -------------------------------------------------------------------------
+
+    def get_arrays(self) -> Sequence[ArrayLike]:
+        """Return one array-like object per position.
+
+        Must be called after prepare() but before finalize().
+        Caller should retains references if needed after finalize().
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support read access"
+        )
 
     def get_metadata(self) -> Any:
         """Get the base metadata structure generated from acquisition settings.

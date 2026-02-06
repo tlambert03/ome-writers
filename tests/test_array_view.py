@@ -26,15 +26,24 @@ DIM_SPECS = {
     "t": {"count": 3, "chunk_size": 1, "type": "time"},
     "c": {"count": 2, "chunk_size": 1, "type": "channel"},
     "z": {"count": 4, "chunk_size": 1, "type": "space"},
-    "y": {"count": 32, "chunk_size": 32, "type": "space"},
-    "x": {"count": 32, "chunk_size": 32, "type": "space"},
+    "y": {"count": 16, "chunk_size": 16, "type": "space"},
+    "x": {"count": 16, "chunk_size": 16, "type": "space"},
 }
 
+NP = len(DIM_SPECS["p"]["coords"])
+NC = DIM_SPECS["c"]["count"]
+NT = DIM_SPECS["t"]["count"]
+NZ = DIM_SPECS["z"]["count"]
+NY = DIM_SPECS["y"]["count"]
+NX = DIM_SPECS["x"]["count"]
 
-@pytest.mark.parametrize("dim_order", ["".join(p) + "yx" for p in permutations("tpcz")])
-def test_all_dimension_orders(
-    tmp_path: Path, dim_order: str, zarr_backend: str
-) -> None:
+DIM_ORDERS: list[str] = ["".join(p) + "yx" for p in permutations("tpcz")]
+# add a few dim orders without one of tpc or z ...
+DIM_ORDERS += ["pyx", "tpyx", "cpzyx", "ptyx"]
+
+
+@pytest.mark.parametrize("dim_order", DIM_ORDERS)
+def test_array_view(tmp_path: Path, dim_order: str, zarr_backend: str) -> None:
     """Test that array view works correctly for all dimension orderings.
 
     This tests all 24 permutations of (t, p, c, z) with y, x always at the end.
@@ -53,15 +62,22 @@ def test_all_dimension_orders(
     view = write_encoded_data(settings, return_view=True)
 
     # Test basic indexing works
-    n_dims = len(view.shape) - 2  # All except y, x
-    result = view[(0,) * n_dims]
-    assert result.shape == (32, 32)
+    non_xy_dims = len(view.shape) - 2  # All except y, x
+    result = view[(0,) * non_xy_dims]
+    assert result.shape == (NY, NX)
 
     # Test slicing works - get first slice of non-spatial dims
-    result = view[(slice(0, 1),) * n_dims]
-    assert result.shape == (1,) * (n_dims) + (32, 32)
+    result = view[(slice(0, 1),) * non_xy_dims]
+    assert result.shape == (1,) * (non_xy_dims) + (NY, NX)
 
     arr = np.asarray(view)
     assert isinstance(arr, np.ndarray)
     assert arr.shape == view.shape == settings.shape
     assert arr.dtype == view.dtype == settings.dtype
+
+    # test_position_slicing:
+    if (pos_ax := settings.position_dimension_index) is not None:
+        # Take first index of all non-xy dims, except slice all positions
+        index = tuple(slice(None) if i == pos_ax else 0 for i in range(non_xy_dims))
+        result = view[index]
+        assert result.shape == (NP, NY, NX)
