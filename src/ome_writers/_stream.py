@@ -8,6 +8,7 @@ import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from ome_writers._array_view import MultiPositionArrayView, create_array_view
 from ome_writers._router import FrameRouter
 
 if TYPE_CHECKING:
@@ -54,12 +55,13 @@ class OMEStream:
     """
 
     def __init__(
-        self, backend: ArrayBackend, router: FrameRouter, expected_frames: int | None
+        self, backend: ArrayBackend, router: FrameRouter, settings: AcquisitionSettings
     ) -> None:
         self._backend = backend
         self._router = router
         self._iterator = iter(router)
-        self._expected_frames = expected_frames
+        self._expected_frames = settings.num_frames
+        self._settings = settings
 
         # Mutable state container shared with finalizer
         self._state = {"has_appended": False}
@@ -204,6 +206,9 @@ class OMEStream:
         # Detach returns the callback args if finalizer was still alive, None otherwise
         if self._finalizer.detach():
             self._backend.finalize()
+
+    def _array_view(self) -> MultiPositionArrayView:
+        return create_array_view(self._backend, self._settings)
 
 
 def get_format_for_backend(backend: str) -> FileFormat:
@@ -352,7 +357,7 @@ def create_stream(settings: AcquisitionSettings) -> OMEStream:
     except FileExistsError:
         backend.finalize()
         raise
-    return OMEStream(backend, router, settings.num_frames)
+    return OMEStream(backend, router, settings)
 
 
 def _create_backend(settings: AcquisitionSettings) -> ArrayBackend:

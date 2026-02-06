@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from ome_writers import AcquisitionSettings, Dimension, Position
-from ome_writers._frame_encoder import write_encoded_data
+from ome_writers._frame_encoder import validate_encoded_frame_values, write_encoded_data
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,20 +43,20 @@ DIM_ORDERS += ["pyx", "tpyx", "cpzyx", "ptyx"]
 
 
 @pytest.mark.parametrize("dim_order", DIM_ORDERS)
-def test_array_view(tmp_path: Path, dim_order: str, zarr_backend: str) -> None:
+def test_array_view(tmp_path: Path, dim_order: str, any_backend: str) -> None:
     """Test that array view works correctly for all dimension orderings.
 
     This tests all 24 permutations of (t, p, c, z) with y, x always at the end.
     """
-    if zarr_backend == "acquire-zarr":
+    if any_backend == "acquire-zarr":
         pytest.skip("acquire-zarr doesn't support read-only views")
 
     settings = AcquisitionSettings(
-        root_path=tmp_path / f"test_{dim_order}.ome.zarr",
+        root_path=tmp_path / f"test_{dim_order}",
         dimensions=[Dimension(name=dim, **DIM_SPECS[dim]) for dim in dim_order],
         dtype="uint16",
         overwrite=True,
-        format=zarr_backend,
+        format=any_backend,
     )
 
     view = write_encoded_data(settings, return_view=True)
@@ -75,9 +75,16 @@ def test_array_view(tmp_path: Path, dim_order: str, zarr_backend: str) -> None:
     assert arr.shape == view.shape == settings.shape
     assert arr.dtype == view.dtype == settings.dtype
 
+    # Get dimension names in acquisition order (view order),
+    # excluding position and spatial dims
+    expected_names = [d.name for d in settings.index_dimensions]
     # test_position_slicing:
     if (pos_ax := settings.position_dimension_index) is not None:
         # Take first index of all non-xy dims, except slice all positions
         index = tuple(slice(None) if i == pos_ax else 0 for i in range(non_xy_dims))
         result = view[index]
         assert result.shape == (NP, NY, NX)
+
+        for pos_idx in range(NP):
+            ary = np.take(arr, pos_idx, axis=settings.position_dimension_index)
+            validate_encoded_frame_values(ary, expected_names, pos_idx=pos_idx)

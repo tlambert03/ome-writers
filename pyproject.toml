@@ -86,6 +86,10 @@ test-codspeed = [
     "ome-writers[all]",
     "pytest-codspeed",
 ]
+pymmcore = [
+    "ndv[pyqt,vispy]>=0.4.0",
+    "pymmcore-plus>=0.17.1",
+]
 dev = [
     { include-group = "test" },
     { include-group = 'tensorstore' },
@@ -105,12 +109,14 @@ dev = [
     "pytest-xdist>=3.8.0",
     "typer>=0.15.0",
     "pdbpp>=0.12.0; sys_platform != 'win32'",
+    "ndv[pyqt,vispy]>=0.4.0",
 ]
 docs = [
     "griffe-fieldz>=0.4.0",
     "mkdocstrings-python>=2.0.1",
     "zensical>=0.0.18",
 ]
+
 
 [project.urls]
 homepage = "https://github.com/pymmcore-plus/ome-writers"
@@ -187,6 +193,8 @@ filterwarnings = [
     "ignore:Benchmarks are automatically disabled because xdist plugin is active:",
     "ignore:Valgrind instrument ignores rounds:UserWarning",
     "ignore:\\s*Output format could not be inferred from root_path:UserWarning",
+    # TiffFile handles are closed by ZarrTiffStore on GC - expected behavior
+    "ignore:unclosed file.*\\.tiff:ResourceWarning",
 ]
 
 # https://coverage.readthedocs.io/

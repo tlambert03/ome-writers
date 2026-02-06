@@ -3,6 +3,7 @@
 # dependencies = [
 #     "ome-writers[all]",
 #     "pymmcore-plus>=0.16.0",
+#     "ndv[vispy,pyqt]",
 # ]
 #
 # [tool.uv.sources]
@@ -12,6 +13,7 @@
 
 import sys
 
+import ndv
 import numpy as np
 import useq
 from pymmcore_plus import CMMCorePlus
@@ -21,6 +23,7 @@ from ome_writers import AcquisitionSettings, create_stream, useq_to_acquisition_
 # Initialize pymmcore-plus core and load system configuration (null = demo config)
 core = CMMCorePlus()
 core.loadSystemConfiguration()
+core.setProperty("Camera", "Mode", "Noise")
 
 # Create a MDASequence, which will be used to run the MDA with pymmcore-plus
 seq = useq.MDASequence(
@@ -33,7 +36,7 @@ seq = useq.MDASequence(
         {"config": "DAPI", "exposure": 2},
         {"config": "FITC", "exposure": 10},
     ),
-    time_plan={"interval": 0.5, "loops": 2},
+    time_plan={"interval": 2, "loops": 10},
     z_plan={"range": 3.5, "step": 0.5},
     axis_order="tpcz",
 )
@@ -64,15 +67,25 @@ settings = AcquisitionSettings(
 )
 
 # Open the stream and run the sequence
-with create_stream(settings) as stream:
-    # Connect frameReady event to append frames to the stream
-    @core.mda.events.frameReady.connect
-    def _on_frame(frame: np.ndarray, event: useq.MDAEvent, metadata: dict) -> None:
-        stream.append(frame)
+stream = create_stream(settings)
 
-    # Tell pymmcore-plus to run the useq.MDASequence
-    core.mda.run(seq)
 
+# Connect frameReady event to append frames to the stream
+@core.mda.events.frameReady.connect
+def _on_frame(frame: np.ndarray, event: useq.MDAEvent, metadata: dict) -> None:
+    stream.append(frame)
+
+
+# Tell pymmcore-plus to run the useq.MDASequence
+thread = core.run_mda(seq)
+
+preview = stream._array_view()
+viewer = ndv.ArrayViewer(preview)
+viewer.show()
+
+ndv.run_app()
+thread.join()
+stream.close()
 
 if settings.format.name == "ome-zarr":
     import yaozarrs

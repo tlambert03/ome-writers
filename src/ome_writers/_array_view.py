@@ -21,6 +21,7 @@ class MultiPositionArrayView:
         arrays: Sequence[ArrayLike],
         position_axis: int | None = 0,
         acquisition_order_perm: tuple[int, ...] | None = None,
+        dimension_labels: tuple[str, ...] = (),
     ) -> None:
         if not arrays:
             raise ValueError("Arrays list cannot be empty")
@@ -31,7 +32,7 @@ class MultiPositionArrayView:
         # ... let's explore that later.
         self._arrays = list(arrays)
         self._acq_perm = acquisition_order_perm
-
+        self._dims = dimension_labels
         # Validate shapes match
         ref = arrays[0].shape
         for i, arr in enumerate(arrays[1:], 1):
@@ -54,6 +55,11 @@ class MultiPositionArrayView:
             if not 0 <= position_axis <= len(acq_shape):
                 raise ValueError(f"position_axis {position_axis} out of range")
         self._position_axis = position_axis
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """Return dimension labels."""
+        return self._dims or tuple(f"d{i}" for i in range(self.ndim))
 
     def _acq_shape(self, storage_shape: tuple[int, ...]) -> tuple[int, ...]:
         """Compute shape in acquisition order from storage shape."""
@@ -175,4 +181,7 @@ def create_array_view(
     else:
         acquisition_perm = None
 
-    return MultiPositionArrayView(arrays, position_axis, acquisition_perm)
+    dimension_labels = [d.name for d in settings.dimensions]
+    return MultiPositionArrayView(
+        arrays, position_axis, acquisition_perm, dimension_labels
+    )
