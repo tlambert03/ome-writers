@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from itertools import islice
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -138,7 +138,8 @@ def write_encoded_data(
     *,
     real_unbounded_count: int = 2,
     mode: EncodeMode = "random-corner",
-) -> None:
+    return_view: bool = False,
+) -> Any:
     """Write data using the provided writer and settings."""
     frames = frame_generator(
         settings, real_unbounded_count=real_unbounded_count, mode=mode
@@ -146,6 +147,9 @@ def write_encoded_data(
     with create_stream(settings) as stream:
         for frame in frames:
             stream.append(frame)
+        if return_view:
+            return stream._backend.as_array_view()
+    return None
 
 
 def validate_encoded_frame_values(

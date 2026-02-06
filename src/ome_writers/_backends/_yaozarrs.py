@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from ome_writers import __version__
+from ome_writers._array_view import MultiPositionArrayView
 from ome_writers._backends._backend import ArrayBackend
 from ome_writers._backends._chunk_buffer import ChunkBuffer
 from ome_writers._schema import is_channel_dim
@@ -110,6 +111,10 @@ class YaozarrsBackend(ArrayBackend, Generic[_AT]):
         self._finalized = False
         self._root = root = Path(settings.output_path).expanduser().resolve()
         positions = settings.positions
+
+        # Store minimal data for array view (only computed if view is created)
+        self._position_dim_index = settings.position_dimension_index
+        self._storage_perm = settings.storage_index_permutation
 
         # Build storage metadata
         storage_dims = settings.array_storage_dimensions
@@ -341,6 +346,34 @@ class YaozarrsBackend(ArrayBackend, Generic[_AT]):
     def _write(self, array: _AT, index: tuple[int, ...], frame: np.ndarray) -> None:
         """Write frame to array at specified index."""
         array[index] = frame
+
+    def as_array_view(self) -> Any:
+        """Return a read-only view of all position arrays as a single array.
+
+        View shape matches acquisition order from settings.
+
+        If there's no position dimension, returns the single array directly.
+        Otherwise returns a MultiPositionArrayView.
+        """
+        if not self._arrays:
+            raise RuntimeError("Backend not prepared. Call prepare() first.")
+
+        # If no position dimension, just return the single array
+        if self._position_dim_index is None:
+            return self._arrays[0]
+
+        # Compute acquisition order permutation (inverse of storage permutation)
+        # needed to invert the backend arrays, which are in storage order.
+        if (sp := self._storage_perm) is not None:
+            acquisition_perm = tuple(sp.index(i) for i in range(len(sp)))
+        else:
+            acquisition_perm = None
+
+        return MultiPositionArrayView(
+            self._arrays,
+            position_axis=self._position_dim_index,
+            acquisition_order_perm=acquisition_perm,
+        )
 
     def get_metadata(self) -> dict[str, dict]:
         """Get metadata from all array groups in the zarr hierarchy.
