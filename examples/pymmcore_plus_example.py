@@ -36,7 +36,7 @@ seq = useq.MDASequence(
         {"config": "DAPI", "exposure": 2},
         {"config": "FITC", "exposure": 10},
     ),
-    time_plan={"interval": 2, "loops": 10},
+    time_plan={"interval": 2, "loops": 4},
     z_plan={"range": 3.5, "step": 0.5},
     axis_order="tpcz",
 )
@@ -76,14 +76,14 @@ def _on_frame(frame: np.ndarray, event: useq.MDAEvent, metadata: dict) -> None:
     stream.append(frame)
 
 
-# Tell pymmcore-plus to run the useq.MDASequence
+# run the useq.MDASequence in a separate thread
 thread = core.run_mda(seq)
-
-preview = stream._array_view()
-viewer = ndv.ArrayViewer(preview)
+# watch it in ndv while it's running
+viewer = ndv.ArrayViewer(stream.ndv_wrapper())
 viewer.show()
-
 ndv.run_app()
+
+# cleanup
 thread.join()
 stream.close()
 
@@ -97,9 +97,9 @@ if settings.format.name == "ome-tiff":
     from ome_types import from_tiff
 
     if len(seq.stage_positions) == 0:
-        files = [settings.root_path]
+        files = [settings.output_path]
     else:
-        files = [f"{settings.root_path[:-9]}_p{pos:03d}.ome.tiff" for pos in range(2)]
+        files = [f"{settings.output_path[:-9]}_p{pos:03d}.ome.tiff" for pos in range(2)]
     for idx, file in enumerate(files):
         from_tiff(file)
         print(f"✓ TIFF file {idx} is valid")

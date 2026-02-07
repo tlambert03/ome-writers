@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 import numpy.typing as npt
 
-from ome_writers._schema import Dimension, dims_from_standard_axes
-
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
+
+    from ome_writers import Dimension
 
 
 def fake_data_for_sizes(
@@ -39,6 +39,8 @@ def fake_data_for_sizes(
     if not {"y", "x"} <= sizes.keys():  # pragma: no cover
         raise ValueError("sizes must include both 'y' and 'x'")
 
+    from ome_writers._schema import dims_from_standard_axes
+
     dims = dims_from_standard_axes(sizes=sizes, chunk_shapes=chunk_sizes)
 
     shape = [d.count for d in dims]
@@ -64,3 +66,77 @@ def fake_data_for_sizes(
                 i += 1
 
     return _build_plane_generator(), dims, dtype
+
+
+def high_water_marks(shape: tuple[range | int, ...]) -> dict[int, list[int]]:
+    """Return the "high water marks" for a given shape.
+
+    The high water marks are the unique indices at which the maximum observerved value
+    for any dimension increases, along with the corresponding multi-dimensional
+    indices.
+
+    Parameters
+    ----------
+    shape : tuple[range | int, ...]
+        The shape of the multi-dimensional array. The first element (and only the first
+        element) can be a range to specify a sub-range of the first dimension.
+
+    Returns
+    -------
+    dict[int, list[int]]
+        A dictionary mapping unique linear indices where high water marks occur to their
+        corresponding multi-dimensional indices.
+
+    Examples
+    --------
+    ```python
+    >>> high_water_marks((4, 3, 2))
+    {
+        0: [0, 0, 0],
+        1: [0, 0, 1],
+        2: [0, 1, 1],
+        4: [0, 2, 1],
+        6: [1, 2, 1],
+        12: [2, 2, 1],
+        18: [3, 2, 1]
+    }
+    >>> high_water_marks((range(2), 3, 2))
+    {0: [0, 0, 0], 1: [0, 0, 1], 2: [0, 1, 1], 4: [0, 2, 1], 6: [1, 2, 1]}
+    >>> high_water_marks((range(2, 4),3,2))
+    {12: [2, 2, 1], 18: [3, 2, 1]}
+    ```
+    """
+    if not shape:
+        return {}
+
+    first, *rest = shape
+
+    if isinstance(first, range):
+        a0_lo, a0_hi = first.start, first.stop
+    else:
+        a0_lo, a0_hi = 0, first
+
+    strides = []
+    stride = 1
+    for s in reversed([a0_hi, *rest]):
+        strides.append((stride, s - 1))  # type:ignore
+        stride *= s  # type:ignore
+    strides.reverse()
+
+    lo = a0_lo * strides[0][0]
+    hi = a0_hi * strides[0][0]
+
+    arrays = []
+    for st, mx in strides:
+        v_lo = -(-lo // st)
+        v_hi = min((hi - 1) // st, mx)
+        if v_lo <= v_hi:
+            arrays.append(np.arange(v_lo, v_hi + 1) * st)
+
+    if not arrays:
+        return {}
+
+    bump_indices = np.unique(np.concatenate(arrays))
+    values = np.column_stack([np.minimum(bump_indices // st, mx) for st, mx in strides])
+    a, b = bump_indices.tolist(), values.tolist()
+    return dict(zip(a, b, strict=False))

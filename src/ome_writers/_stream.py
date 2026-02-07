@@ -6,15 +6,17 @@ import sys
 import warnings
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TypeGuard
 
 from ome_writers._array_view import MultiPositionArrayView, create_array_view
 from ome_writers._router import FrameRouter
+from ome_writers._util import high_water_marks
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Hashable, Mapping, Sequence
 
     import numpy as np
+    from ndv import DataWrapper
 
     from ome_writers._backends._backend import ArrayBackend
     from ome_writers._schema import AcquisitionSettings, FileFormat
@@ -62,6 +64,19 @@ class OMEStream:
         self._iterator = iter(router)
         self._expected_frames = settings.num_frames
         self._settings = settings
+        self._ndv_wrapper: DataWrapper | None = (
+            None  # Lazy NDV wrapper, created on demand
+        )
+
+        self._frames_written = 0
+
+        dims = settings.dimensions
+        self._non_frame_dims = dims[:-2]
+        non_frame_shape = tuple(d.count or 10000 for d in dims[:-2])
+        self._high_water_marks = high_water_marks(non_frame_shape)
+        self._current_max_indices = [-1] * len(non_frame_shape)
+        self._base_coords = {d.name: range(1) for d in dims[:-2]}
+        self._base_coords.update({d.name: range(d.count) for d in dims[-2:]})
 
         # Mutable state container shared with finalizer
         self._state = {"has_appended": False}
@@ -135,6 +150,13 @@ class OMEStream:
         self._backend.write(pos_idx, idx, frame, frame_metadata=frame_metadata)
         self._state["has_appended"] = True
 
+        # Check if we hit a high water mark
+        if max_indices := self._high_water_marks.get(self._frames_written):
+            self._current_max_indices = max_indices
+            if self._frames_written and self._ndv_wrapper is not None:
+                self._ndv_wrapper.dims_changed.emit()
+        self._frames_written += 1
+
     def skip(self, *, frames: int = 1) -> None:
         """Skip N frames in acquisition order without writing data.
 
@@ -207,8 +229,68 @@ class OMEStream:
         if self._finalizer.detach():
             self._backend.finalize()
 
+    def _seen_coords(self) -> Mapping[str, Sequence]:
+        """Tracks the range of 'seen' coordinates for each axis.
+
+        Returns a mapping of dimension name to available coordinates.
+        - Frame dimensions (Y, X): always full range
+        - Dimensions with coords (positions, channels): list of coord names up to max
+          index
+        - Other dimensions: range up to max index
+
+        Examples
+        --------
+        After writing frames with positions and channels:
+
+        ```python
+        >>> stream._seen_coords()
+        {
+            "t": range(0, 2),
+            "p": ["pos0", "pos1"],
+            "c": ["DAPI", "GFP"],
+            "y": range(0, 512),
+            "x": range(0, 512),
+        }
+        ```
+        """
+        result = dict(self._base_coords)
+        if not self._current_max_indices:
+            return result
+
+        for i, dim in enumerate(self._non_frame_dims):
+            max_idx = self._current_max_indices[i] + 1
+            if dim.coords:
+                result[dim.name] = [c.name for c in dim.coords[:max_idx]]
+            else:
+                result[dim.name] = range(max_idx)
+
+        return result
+
     def _array_view(self) -> MultiPositionArrayView:
         return create_array_view(self._backend, self._settings)
+
+    def ndv_wrapper(self) -> Any:
+        if self._ndv_wrapper is None:
+            from ndv import DataWrapper
+
+            # Store reference to stream for closure
+            stream = self
+
+            class OmeWritersNDVWrapper(DataWrapper):
+                @property
+                def dims(_self) -> tuple[Hashable, ...]:
+                    return tuple(d.name for d in stream._settings.dimensions)
+
+                @property
+                def coords(_self) -> Mapping[Hashable, Sequence]:
+                    return stream._seen_coords()  # type: ignore [return-value]
+
+                @classmethod
+                def supports(cls, obj: Any) -> TypeGuard[Any]:
+                    return False
+
+            self._ndv_wrapper = OmeWritersNDVWrapper(self._array_view())
+        return self._ndv_wrapper
 
 
 def get_format_for_backend(backend: str) -> FileFormat:

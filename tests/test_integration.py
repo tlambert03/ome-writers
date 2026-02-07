@@ -24,6 +24,7 @@ from ome_writers import (
     _memory,
     _stream,
     create_stream,
+    dims_from_standard_axes,
 )
 from ome_writers._frame_encoder import validate_encoded_frame_values, write_encoded_data
 from tests._utils import read_array_data
@@ -646,3 +647,65 @@ def test_append_too_many_frames(tmp_path: Path, any_backend: str) -> None:
 
         with pytest.raises(IndexError, match="Cannot append frame: would exceed total"):
             stream.append(empty_frame)
+
+
+# fmt: off
+@pytest.mark.parametrize(
+    ("dim_spec", "expected_progression"),
+    [
+        # Simple time-lapse: T grows, Y/X always full
+        (
+            {"t": 3, "y": 32, "x": 32},
+            [
+                {"t": range(1), "y": range(32), "x": range(32)},
+                {"t": range(2), "y": range(32), "x": range(32)},
+                {"t": range(3), "y": range(32), "x": range(32)},
+            ],
+        ),
+        # Multi-position with string coords
+        (
+            {"p": ["Pos0", "Pos1", "Pos2"], "y": 32, "x": 32},
+            [
+                {"p": ["Pos0"], "y": range(32), "x": range(32)},
+                {"p": ["Pos0", "Pos1"], "y": range(32), "x": range(32)},
+                {"p": ["Pos0", "Pos1", "Pos2"], "y": range(32), "x": range(32)},
+            ],
+        ),
+        # Time with positions (interleaved)
+        (
+            {"t": 2, "c": ["DAPI", "GFP"], "p": ["A", "B"], "y": 32, "x": 32},
+            [
+                {"t": range(1), "c": ["DAPI"], "p": ["A"], "y": range(32), "x": range(32)},  # noqa
+                {"t": range(1), "c": ["DAPI"], "p": ["A", "B"], "y": range(32), "x": range(32)},  # noqa
+                {"t": range(1), "c": ["DAPI", "GFP"], "p": ["A", "B"], "y": range(32), "x": range(32)},  # noqa
+                {"t": range(1), "c": ["DAPI", "GFP"], "p": ["A", "B"], "y": range(32), "x": range(32)},  # noqa
+                {"t": range(2), "c": ["DAPI", "GFP"], "p": ["A", "B"], "y": range(32), "x": range(32)},  # noqa
+            ],
+        ),
+    ],
+    ids=["time-lapse", "multi-position", "time-position-interleaved"],
+)
+def test_coords_tracking(
+    tmp_path: Path,
+    first_backend: str,
+    dim_spec: dict,
+    expected_progression: list[dict],
+) -> None:
+    """Test that _coords() correctly tracks available coordinates as frames append."""
+    # fmt: on
+
+    settings = AcquisitionSettings(
+        root_path=str(tmp_path / "coords_test"),
+        dimensions=dims_from_standard_axes(dim_spec),
+        dtype="uint16",
+        format=first_backend,
+    )
+
+    frame_shape = (32, 32)
+    empty_frame = np.zeros(frame_shape, dtype="uint16")
+
+    stream = create_stream(settings)
+    with stream:
+        for expected_coords in expected_progression:
+            stream.append(empty_frame)
+            assert stream._seen_coords() == expected_coords
