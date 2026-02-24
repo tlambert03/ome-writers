@@ -112,8 +112,9 @@ dev = [
 ]
 docs = [
     "griffe-fieldz>=0.4.0",
-    "mkdocstrings-python>=2.0.1",
-    "zensical>=0.0.18",
+    "mkdocstrings-python>=2.0",
+    "pymmcore-docs-theme>=2025.1",
+    "zensical>=0.0.23",
 ]
 pymmcore = [
     "ndv[pyqt,vispy]>=0.4.1",

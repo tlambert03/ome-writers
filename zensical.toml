@@ -1,73 +1,99 @@
+# Shared config is managed by pymmcore-docs-theme — see ecosystem.toml.
+
 [project]
 site_name = "ome-writers"
+site_url = "https://pymmcore-plus.github.io/ome-writers/"
 site_description = "Unified APIs for streaming frames to OME-TIFF and OME-ZARR."
 site_author = "pymmcore-plus team"
-site_url = "https://pymmcore-plus.github.io/ome-writers/"
-repo_name = "pymmcore-plus/ome-writers"
 repo_url = "https://github.com/pymmcore-plus/ome-writers"
-copyright = ""
+repo_name = "pymmcore-plus/ome-writers"
 
 nav = [
-  "index.md",
-  "install.md",
-  "usage.md",
-  "performance.md",
-  { "Formats" = [
-    "formats/index.md",
-    "formats/tiff.md",
-    "formats/zarr.md",
-    "formats/scratch.md",
+  { "Home" = "https://pymmcore-plus.github.io/pymmcore-docs/" },
+  { "pymmcore-plus" = "https://pymmcore-plus.github.io/pymmcore-plus/" },
+  { "useq-schema" = "https://pymmcore-plus.github.io/useq-schema/" },
+  { "pymmcore-widgets" = "https://pymmcore-plus.github.io/pymmcore-widgets/" },
+  { "ome-writers" = [
+    "index.md",
+    "install.md",
+    "usage.md",
+    "performance.md",
+    { "Formats" = [
+      "formats/index.md",
+      "formats/tiff.md",
+      "formats/zarr.md",
+      "formats/scratch.md",
+    ] },
+    "reference.md",
+    { "Examples" = [
+      "examples/single_5d_image.md",
+      "examples/multiposition.md",
+      "examples/plate.md",
+      "examples/unbounded.md",
+      "examples/transposed.md",
+      "examples/event_driven.md",
+      "examples/pymmcore_plus.md",
+    ] },
   ] },
-  "reference.md",
-  { "Examples" = [
-    "examples/single_5d_image.md",
-    "examples/multiposition.md",
-    "examples/plate.md",
-    "examples/unbounded.md",
-    "examples/transposed.md",
-    "examples/event_driven.md",
-    "examples/pymmcore_plus.md",
-  ] },
+  { "pymmcore-gui" = "https://pymmcore-plus.github.io/pymmcore-gui/" },
 ]
 
 [project.theme]
-icon.logo = "lucide/file-box"
+icon.logo = "lucide/microscope"
 features = [
   "content.code.annotate",
   "content.code.copy",
   "content.code.select",
-  "content.footnote.tooltips",
   "content.tabs.link",
   "content.tooltips",
   "navigation.footer",
   "navigation.indexes",
-  "navigation.path",
+  "navigation.tabs",
   "toc.follow",
   "search.highlight",
 ]
 font.text = "Inter"
 font.code = "Fira Code"
 
-[project.markdown_extensions.pymdownx.highlight]
-[project.markdown_extensions.admonition]
-[project.markdown_extensions.pymdownx.inlinehilite]
-[project.markdown_extensions.pymdownx.snippets]
-[project.markdown_extensions.pymdownx.superfences]
-[project.markdown_extensions.pymdownx.tabbed]
-alternate_style = true
-[project.markdown_extensions.pymdownx.emoji]
-emoji_index = "zensical.extensions.emoji.twemoji"
-emoji_generator = "zensical.extensions.emoji.to_svg"
-
 [[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
 scheme = "default"
+primary = "teal"
+accent = "cyan"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
 scheme = "slate"
+primary = "teal"
+accent = "cyan"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
+
+[project.markdown_extensions.toc]
+permalink = "#"
+
+[project.markdown_extensions.tables]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.highlight]
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.snippets]
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
+[project.markdown_extensions.pymdownx.emoji]
+emoji_index = "zensical.extensions.emoji.twemoji"
+emoji_generator = "zensical.extensions.emoji.to_svg"
 
 [project.plugins.mkdocstrings.handlers.python]
 inventories = [
@@ -81,11 +107,11 @@ docstring_style = "numpy"
 docstring_section_style = "table"
 show_source = false
 show_bases = false
+show_root_heading = true
+show_root_toc_entry = false
 show_symbol_type_toc = true
 show_symbol_type_heading = true
 merge_init_into_class = true
-show_root_heading = false
-show_root_toc_entry = false
 modernize_annotations = true
 separate_signature = true
 show_signature_annotations = true
