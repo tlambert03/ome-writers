@@ -57,9 +57,11 @@ class LiveTiffStore(Store):
         "_dtype",
         "_fill_value",
         "_frame_size_bytes",
+        "_inner_prod",
         "_path",
         "_shape",
         "_thread",
+        "_unbounded",
     )
 
     def __init__(
@@ -70,6 +72,7 @@ class LiveTiffStore(Store):
         dtype: str,
         chunks: tuple[int, ...],
         fill_value: int = 0,
+        unbounded: bool = False,
     ) -> None:
         super().__init__(read_only=True)
         self._thread = writer_thread
@@ -78,6 +81,8 @@ class LiveTiffStore(Store):
         self._dtype = dtype
         self._chunks = chunks
         self._fill_value = fill_value
+        self._unbounded = unbounded
+        self._inner_prod = math.prod(shape[1:-2]) or 1
 
         # Calculate frame geometry
         frame_size = math.prod(shape[-2:])  # (Y, X)
@@ -180,7 +185,13 @@ class LiveTiffStore(Store):
         with self._thread.state_lock:
             n_frames = self._thread.frames_written
 
-        dims = self._shape[:-2]
+        # For unbounded dims, compute actual outer extent from frames_written
+        # (can't iterate the sentinel value)
+        if self._unbounded:
+            outer = math.ceil(n_frames / self._inner_prod) if n_frames else 0
+            dims = (outer, *self._shape[1:-2])
+        else:
+            dims = self._shape[:-2]
         chunk_dims = self._chunks[:-2]
         n_chunks = tuple(
             (size + chunk - 1) // chunk

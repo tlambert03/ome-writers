@@ -341,9 +341,17 @@ class TiffBackend(ArrayBackend):
             thread = manager.thread
             assert thread is not None, f"No WriterThread for {path}"
 
+            is_unbounded = storage_dims[0].count is None
+
             if self._finalized:
                 frames_written = thread.frames_written
-                shape = tuple(d.count or 1 for d in storage_dims)
+                if is_unbounded:
+                    shape = (
+                        thread._logical_outer,
+                        *(d.count for d in storage_dims[1:]),
+                    )
+                else:
+                    shape = tuple(d.count for d in storage_dims)
                 if frames_written == 0:
                     zarray = zarr.create(shape, dtype=self._dtype, fill_value=0)
                     arrays.append(zarray)
@@ -366,12 +374,19 @@ class TiffBackend(ArrayBackend):
             store = LiveTiffStore(
                 writer_thread=thread,
                 file_path=path,
-                shape=tuple(d.count or 1000 for d in storage_dims),
+                shape=tuple(
+                    d.count or _UNBOUNDED_SENTINEL for d in storage_dims
+                ),
                 dtype=self._dtype,
                 chunks=tuple(1 for _ in storage_dims[:-2]) + self._frame_shape,
                 fill_value=0,
+                unbounded=is_unbounded,
             )
-            arrays.append(zarr.open(store, mode="r"))
+            arr = zarr.open(store, mode="r")
+            if is_unbounded:
+                arrays.append(_LiveArrayView(arr, thread))
+            else:
+                arrays.append(arr)
 
         return arrays
 
@@ -488,6 +503,8 @@ class WriterThread(threading.Thread):
         self._res = 1 / pixelsize
         self._has_unbounded = has_unbounded
         self._compression = compression
+        self._inner_prod = math.prod(shape[1:-2]) or 1
+        self._logical_outer = 0
         self.frames_written = 0  # Track actual frames written for unbounded dims
         self.state_lock = threading.Lock()  # Synchronize with readers
         self.data_offset: int | None = None  # Byte offset where frame data starts
@@ -549,6 +566,10 @@ class WriterThread(threading.Thread):
                     # Increment counter AFTER write and flush to ensure readers
                     # only see frames that are fully written
                     self.frames_written += 1
+                    if self._has_unbounded:
+                        self._logical_outer = math.ceil(
+                            self.frames_written / self._inner_prod
+                        )
 
         except Exception as e:  # pragma: no cover
             # Unexpected errors - log and continue
@@ -563,3 +584,30 @@ class WriterThread(threading.Thread):
 
 
 _thread_counter = count()
+
+_UNBOUNDED_SENTINEL = 999_999_999
+
+
+class _LiveArrayView:
+    """Thin wrapper reporting logical shape over an over-allocated zarr Array."""
+
+    __slots__ = ("_arr", "_thread")
+
+    def __init__(self, arr: object, thread: WriterThread) -> None:
+        self._arr = arr
+        self._thread = thread
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return (self._thread._logical_outer, *self._thread._shape[1:])
+
+    @property
+    def dtype(self) -> np.dtype:
+        return self._arr.dtype  # type: ignore[union-attr]
+
+    @property
+    def ndim(self) -> int:
+        return len(self._thread._shape)
+
+    def __getitem__(self, key: object) -> np.ndarray:
+        return self._arr[key]  # type: ignore[index]

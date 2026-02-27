@@ -324,3 +324,120 @@ def test_tiff_view_on_empty_finalized_compressed_stream(tmp_path: Path) -> None:
     view = stream.view(dynamic_shape=False)
     assert view.shape == tuple(d.count for d in settings.dimensions)
     assert np.allclose(view[:], 0)
+
+
+# ---- Unbounded dimension tests ----
+
+
+def test_unbounded_finalized_shape(tmp_path: Path) -> None:
+    """Finalized unbounded T+C stream has correct T in shape."""
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "unbounded_fin.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=None, type="time"),
+            Dimension(name="c", count=2, type="channel"),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+        overwrite=True,
+        format="tifffile",
+    )
+    n_timepoints = 5
+    n_frames = n_timepoints * 2  # T * C
+    with create_stream(settings) as stream:
+        for i in range(n_frames):
+            stream.append(np.full((16, 16), i, dtype=np.uint16))
+
+    # Finalized: get_arrays should compute correct T
+    backend = stream._backend
+    arrays = backend.get_arrays()
+    assert len(arrays) == 1
+    assert arrays[0].shape == (n_timepoints, 2, 16, 16)
+
+
+def test_unbounded_finalized_zero_frames(tmp_path: Path) -> None:
+    """Finalized unbounded stream with 0 frames has shape (0, ..., Y, X)."""
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "unbounded_zero.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=None, type="time"),
+            Dimension(name="c", count=2, type="channel"),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+        overwrite=True,
+        format="tifffile",
+    )
+    stream = create_stream(settings)
+    stream.close()
+
+    backend = stream._backend
+    arrays = backend.get_arrays()
+    assert len(arrays) == 1
+    assert arrays[0].shape == (0, 2, 16, 16)
+
+
+def test_unbounded_live_shape_grows(tmp_path: Path) -> None:
+    """Live unbounded stream's array shape grows with frames."""
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "unbounded_live.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=None, type="time"),
+            Dimension(name="c", count=2, type="channel"),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+        overwrite=True,
+        format="tifffile",
+    )
+    with create_stream(settings) as stream:
+        # Write first channel pair (t=0)
+        stream.append(np.full((16, 16), 1, dtype=np.uint16))
+        stream.append(np.full((16, 16), 2, dtype=np.uint16))
+        wait_for_frames(stream._backend, expected_count=2)
+
+        arrays = stream._backend.get_arrays()
+        assert len(arrays) == 1
+        arr = arrays[0]
+        assert arr.shape == (1, 2, 16, 16)
+
+        # Write more frames (t=1)
+        stream.append(np.full((16, 16), 3, dtype=np.uint16))
+        stream.append(np.full((16, 16), 4, dtype=np.uint16))
+        wait_for_frames(stream._backend, expected_count=4)
+        assert arr.shape == (2, 2, 16, 16)
+
+        # Verify data is readable
+        data = arr[0, 0]
+        assert data.shape == (16, 16)
+        assert np.all(data == 1)
+
+
+def test_unbounded_live_many_frames(tmp_path: Path) -> None:
+    """Regression: >1000 frames with unbounded dim (old hardcoded ceiling)."""
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "unbounded_many.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=None, type="time"),
+            Dimension(name="y", count=4, type="space"),
+            Dimension(name="x", count=4, type="space"),
+        ],
+        dtype="uint8",
+        overwrite=True,
+        format="tifffile",
+    )
+    n_frames = 1100  # exceeds old hardcoded 1000
+    with create_stream(settings) as stream:
+        for _ in range(n_frames):
+            stream.append(np.ones((4, 4), dtype=np.uint8))
+        wait_for_frames(stream._backend, expected_count=n_frames)
+
+        arrays = stream._backend.get_arrays()
+        assert arrays[0].shape == (n_frames, 4, 4)
+
+    # Also check finalized path
+    arrays = stream._backend.get_arrays()
+    assert arrays[0].shape == (n_frames, 4, 4)
