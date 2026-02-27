@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from zarr.abc.store import Store
@@ -98,10 +98,6 @@ class LiveTiffStore(Store):
         outer = math.ceil(fw / self._inner_prod) if fw else 0
         return (outer, *self._base_shape[1:])
 
-    def _with_outer(self, n: int) -> _OuterOverrideStore:
-        """Return a thin wrapper reporting (n, ...) as the outer dim."""
-        return _OuterOverrideStore(self, n)
-
     # Properties required by zarr Store protocol
     @property
     def supports_writes(self) -> bool:
@@ -185,12 +181,10 @@ class LiveTiffStore(Store):
             return False
 
     async def set(self, key: str, value: Buffer) -> None:  # pragma: no cover
-        """Not supported - read-only store."""
-        raise NotImplementedError("LiveTiffStore is read-only")
+        """No-op — accepts metadata writes from zarr.Array.resize()."""
 
     async def delete(self, key: str) -> None:  # pragma: no cover
-        """Not supported - read-only store."""
-        raise NotImplementedError("LiveTiffStore is read-only")
+        """No-op — accepts deletes from zarr.Array.resize()."""
 
     async def list(self) -> AsyncIterator[str]:
         """List all keys in store."""
@@ -254,12 +248,9 @@ class LiveTiffStore(Store):
         strides = _compute_strides(self._base_shape[:-2])
         return sum(idx * stride for idx, stride in zip(indices, strides, strict=False))
 
-    def _build_metadata(self, shape_override: tuple[int, ...] | None = None) -> str:
+    def _build_metadata(self) -> str:
         """Build zarr.json metadata."""
-        if shape_override is not None:
-            shape = shape_override
-        else:
-            shape = self._effective_shape()
+        shape = self._effective_shape()
         metadata = {
             "zarr_format": 3,
             "node_type": "array",
@@ -279,112 +270,6 @@ class LiveTiffStore(Store):
         }
 
         return json.dumps(metadata, indent=2)
-
-
-class _OuterOverrideStore(Store):
-    """Thin wrapper that overrides the outer dim in metadata for zarr.open."""
-
-    __slots__ = ("_inner", "_outer_n")
-
-    def __init__(self, inner: LiveTiffStore, outer_n: int) -> None:
-        super().__init__(read_only=True)
-        self._inner = inner
-        self._outer_n = outer_n
-
-    @property
-    def supports_writes(self) -> bool:
-        return False  # pragma: no cover
-
-    @property
-    def supports_deletes(self) -> bool:
-        return False  # pragma: no cover
-
-    @property
-    def supports_listing(self) -> bool:
-        return True  # pragma: no cover
-
-    def __eq__(self, value: object) -> bool:  # pragma: no cover
-        return isinstance(value, _OuterOverrideStore) and (
-            self._inner == value._inner and self._outer_n == value._outer_n
-        )
-
-    async def get(
-        self,
-        key: str,
-        prototype: BufferPrototype,
-        byte_range: ByteRequest | None = None,
-    ) -> Buffer | None:
-        if key == "zarr.json":
-            shape = (self._outer_n, *self._inner._base_shape[1:])
-            return prototype.buffer.from_bytes(
-                self._inner._build_metadata(shape_override=shape).encode()
-            )
-        return await self._inner.get(key, prototype, byte_range)
-
-    async def get_partial_values(  # pragma: no cover
-        self,
-        prototype: BufferPrototype,
-        key_ranges: Iterable[tuple[str, ByteRequest | None]],
-    ) -> list[Buffer | None]:  # ty: ignore[invalid-type-form]
-        return [await self.get(key, prototype) for key, _ in key_ranges]
-
-    async def exists(self, key: str) -> bool:  # pragma: no cover
-        return await self._inner.exists(key)
-
-    async def set(self, key: str, value: Buffer) -> None:  # pragma: no cover
-        raise NotImplementedError
-
-    async def delete(self, key: str) -> None:  # pragma: no cover
-        raise NotImplementedError
-
-    async def list(self) -> AsyncIterator[str]:
-        async for key in self._inner.list():
-            yield key
-
-    async def list_prefix(self, prefix: str) -> AsyncIterator[str]:
-        async for key in self._inner.list_prefix(prefix):
-            yield key
-
-    async def list_dir(self, prefix: str) -> AsyncIterator[str]:  # pragma: no cover
-        if False:
-            yield
-
-
-class _LiveTiffArray:
-    """Array proxy with 1.5x growth, analogous to scratch _ensure_size."""
-
-    _GROWTH = 1.5
-    _MIN_ALLOC = 64
-
-    def __init__(self, store: LiveTiffStore) -> None:
-        self._store = store
-        self._arr: Any = None
-        self._alloc_outer = 0
-        self._refresh()
-
-    def _refresh(self) -> None:
-        import zarr
-
-        actual = self._store._effective_shape()[0]
-        self._alloc_outer = max(int(actual * self._GROWTH), actual + self._MIN_ALLOC)
-        self._arr = zarr.open(self._store._with_outer(self._alloc_outer), mode="r")
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return self._store._effective_shape()
-
-    @property
-    def dtype(self) -> np.dtype:
-        return self._arr.dtype
-
-    @property
-    def ndim(self) -> int:
-        return len(self._store._base_shape)
-
-    def __getitem__(self, key: object) -> np.ndarray:
-        if self._store._effective_shape()[0] > self._alloc_outer:
-            self._refresh()
-        return self._arr[key]
 
 
 def _compute_strides(dims: tuple[int, ...]) -> tuple[int, ...]:

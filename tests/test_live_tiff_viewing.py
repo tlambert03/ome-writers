@@ -14,11 +14,7 @@ from tests._utils import wait_for_frames, wait_for_pending_callbacks
 try:
     import zarr
 
-    from ome_writers._backends._live_tiff_store import (
-        LiveTiffStore,
-        _compute_strides,
-        _LiveTiffArray,
-    )
+    from ome_writers._backends._live_tiff_store import LiveTiffStore, _compute_strides
     from ome_writers._backends._tifffile import TiffBackend
 except ImportError:
     pytest.skip(
@@ -384,7 +380,7 @@ def test_unbounded_finalized_zero_frames(tmp_path: Path) -> None:
 
 
 def test_unbounded_live_shape_grows(tmp_path: Path) -> None:
-    """Live unbounded stream's _LiveTiffArray shape grows with frames."""
+    """Live unbounded stream's zarr array shape grows with frames."""
     settings = AcquisitionSettings(
         root_path=tmp_path / "unbounded_live.ome.tiff",
         dimensions=[
@@ -406,7 +402,7 @@ def test_unbounded_live_shape_grows(tmp_path: Path) -> None:
         arrays = stream._backend.get_arrays()
         assert len(arrays) == 1
         arr = arrays[0]
-        assert isinstance(arr, _LiveTiffArray)
+        assert isinstance(arr, zarr.Array)
         assert arr.shape == (1, 2, 16, 16)
 
         # Write more frames (t=1)

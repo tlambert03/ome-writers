@@ -13,6 +13,8 @@ from queue import Queue
 from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
+import zarr.core
+import zarr.core.sync
 
 from ome_writers._backends._backend import ArrayBackend
 from ome_writers._backends._ome_xml import prepare_metadata
@@ -20,6 +22,8 @@ from ome_writers._backends._ome_xml import prepare_metadata
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from typing import Any
+
+    import zarr
 
     from ome_writers._backends._backend import ArrayLike
     from ome_writers._backends._ome_xml import OmeXMLMirror
@@ -347,7 +351,7 @@ class TiffBackend(ArrayBackend):
                 frames_written = thread.frames_written
 
                 if is_unbounded:
-                    inner_prod = math.prod(d.count for d in storage_dims[1:-2]) or 1  # type: ignore
+                    inner_prod = math.prod(d.count for d in storage_dims[1:-2]) or 1  # pyright: ignore
                     outer = (
                         math.ceil(frames_written / inner_prod) if frames_written else 0
                     )
@@ -356,7 +360,7 @@ class TiffBackend(ArrayBackend):
                         *tuple(d.count for d in storage_dims[1:]),
                     )
                 else:
-                    shape = tuple(d.count for d in storage_dims)  # type: ignore
+                    shape = tuple(d.count for d in storage_dims)  # pyright: ignore
 
                 if frames_written == 0:
                     zarray = zarr.create(shape, dtype=self._dtype, fill_value=0)
@@ -378,6 +382,11 @@ class TiffBackend(ArrayBackend):
                     "Tiff viewing is not supported with compression enabled."
                 )
 
+            # Reuse cached array for unbounded live viewing
+            if is_unbounded and thread._live_arr is not None:
+                arrays.append(thread._live_arr)
+                continue
+
             base_shape = tuple(
                 d.count if d.count is not None else 0 for d in storage_dims
             )
@@ -390,12 +399,14 @@ class TiffBackend(ArrayBackend):
                 fill_value=0,
                 unbounded=is_unbounded,
             )
+            arr = zarr.open_array(store)
             if is_unbounded:
-                from ome_writers._backends._live_tiff_store import _LiveTiffArray
-
-                arrays.append(_LiveTiffArray(store))
-            else:
-                arrays.append(zarr.open(store, mode="r"))
+                # Cache on thread; WriterThread._update_live_arr() will
+                # resize this array's metadata as frames arrive.
+                with thread.state_lock:
+                    thread._live_arr = arr
+                    thread._update_live_arr()
+            arrays.append(arr)
 
         return arrays
 
@@ -486,6 +497,23 @@ class TiffBackend(ArrayBackend):
 class WriterThread(threading.Thread):
     """Background thread for sequential TIFF writing."""
 
+    __slots__ = (
+        "_compression",
+        "_current_outer",
+        "_dtype",
+        "_has_unbounded",
+        "_image_queue",
+        "_inner_prod",
+        "_live_arr",
+        "_ome_xml_bytes",
+        "_res",
+        "_shape",
+        "_writer",
+        "data_offset",
+        "frames_written",
+        "state_lock",
+    )
+
     def __init__(
         self,
         writer: tifffile.TiffWriter,
@@ -515,6 +543,10 @@ class WriterThread(threading.Thread):
         self.frames_written = 0  # Track actual frames written for unbounded dims
         self.state_lock = threading.Lock()  # Synchronize with readers
         self.data_offset: int | None = None  # Byte offset where frame data starts
+        # Set by get_arrays() for live unbounded viewing
+        self._live_arr: zarr.Array | None = None
+        self._current_outer = 0
+        self._inner_prod = math.prod(shape[1:-2]) or 1
 
     def run(self) -> None:
         """Write frames from queue to TIFF file sequentially."""
@@ -573,6 +605,7 @@ class WriterThread(threading.Thread):
                     # Increment counter AFTER write and flush to ensure readers
                     # only see frames that are fully written
                     self.frames_written += 1
+                    self._update_live_arr()
 
         except Exception as e:  # pragma: no cover
             # Unexpected errors - log and continue
@@ -584,6 +617,27 @@ class WriterThread(threading.Thread):
         finally:
             with suppress(Exception):
                 self._writer.close()
+
+    def _update_live_arr(self) -> None:
+        """Update cached zarr array shape if outer dim grew (under state_lock)."""
+        arr = self._live_arr
+        if arr is None or not self._has_unbounded:
+            return
+        new_outer = math.ceil(self.frames_written / self._inner_prod)
+        if new_outer == self._current_outer:
+            return
+        self._current_outer = new_outer
+
+        # Resize the array's metadata shape to reflect new frames.
+        # NOTE: this trick relies on:
+        # 1. the LiveTiffStore IS read_only=True
+        #    (but, could be made False if need be in the future... if need be)
+        # 2. LiveTiffStore.set() does NOT raise
+        #    it's a no-op (there to accept the metadata writes from zarr.Array.resize())
+        from zarr.core.sync import sync
+
+        new_shape = (new_outer, *self._shape[1:])
+        sync(arr.async_array.resize(new_shape, delete_outside_chunks=False))
 
 
 _thread_counter = count()

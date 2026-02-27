@@ -196,7 +196,7 @@ class _BoundedCoordTracker(CoordTracker):
         stride = 1
         for c in reversed(non_frame_counts):
             stride_before = stride
-            stride *= c  # type: ignore[operator]  # count is int (bounded)
+            stride *= c  # pyright: ignore
             self._strides.append(stride_before)
         self._strides.reverse()
 
@@ -272,7 +272,7 @@ class _UnboundedCoordTracker(CoordTracker):
         inner_counts = tuple(d.count for d in inner_dims)
 
         # Product of all bounded (inner) non-frame dim counts
-        self._inner_product: int = prod(inner_counts)  # type: ignore[arg-type]
+        self._inner_product: int = prod(inner_counts)  # pyright: ignore
 
         # HWMs for the inner dims only (these are bounded and precomputable)
         self._inner_hwms = high_water_marks(inner_counts)
@@ -291,7 +291,7 @@ class _UnboundedCoordTracker(CoordTracker):
         stride = 1
         for c in reversed(inner_counts):
             stride_before = stride
-            stride *= c  # type: ignore[operator]  # count is int (bounded)
+            stride *= c  # pyright: ignore
             self._strides.append(stride_before)
         self._strides.reverse()
 
@@ -309,7 +309,7 @@ class _UnboundedCoordTracker(CoordTracker):
         # If we've completed at least one full cycle, all inner dims are maxed
         if fc >= self._inner_product:
             for i, d in enumerate(self._non_frame_dims[1:]):
-                self._current_max_indices[i + 1] = d.count - 1  # type: ignore[operator]  # bounded
+                self._current_max_indices[i + 1] = d.count - 1  # pyright: ignore
         else:
             # Inner dims: find highest HWM <= (fc - 1) % inner_product
             inner_offset = (fc - 1) % self._inner_product if self._inner_product else 0
