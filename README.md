@@ -201,7 +201,6 @@ But we also:
     user to create multiple streams).
 - Multi-camera setups, particularly with different image shapes or data types.
   (here too... the caller could just call `append()` in the right order for each buffer)
-- What happens if you want to skip a frame at runtime, maybe `append(None)`?
 
 ## Contributing
 
