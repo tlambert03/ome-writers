@@ -75,6 +75,16 @@ class LiveTiffStore(Store):
         fill_value: int = 0,
         unbounded: bool = False,
     ) -> None:
+        # NOTE:
+        # there is a slight "dishonesty" here that may break in future zarr:
+        # we say "read_only=True" to avoid zarr trying to write metadata
+        # and then in WriterThread._update_live_array we call
+        # sync(arr.async_array.resize...)  which IS a write operation.
+        # It triggers zarr to call to `def set()`... (which is simply a no-op).
+        #
+        # In the future, zarr could chose to check `read_only==False` before trying
+        # to write metadata, which would break this.
+        # If that happens, we can also just set read_only=False and allow the no-op
         super().__init__(read_only=True)
         self._thread = writer_thread
         self._path = file_path
