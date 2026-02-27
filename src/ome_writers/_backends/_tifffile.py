@@ -341,9 +341,23 @@ class TiffBackend(ArrayBackend):
             thread = manager.thread
             assert thread is not None, f"No WriterThread for {path}"
 
+            is_unbounded = storage_dims[0].count is None
+
             if self._finalized:
                 frames_written = thread.frames_written
-                shape = tuple(d.count or 1 for d in storage_dims)
+
+                if is_unbounded:
+                    inner_prod = math.prod(d.count for d in storage_dims[1:-2]) or 1  # type: ignore
+                    outer = (
+                        math.ceil(frames_written / inner_prod) if frames_written else 0
+                    )
+                    shape: tuple[int, ...] = (
+                        outer,
+                        *tuple(d.count for d in storage_dims[1:]),
+                    )
+                else:
+                    shape = tuple(d.count for d in storage_dims)  # type: ignore
+
                 if frames_written == 0:
                     zarray = zarr.create(shape, dtype=self._dtype, fill_value=0)
                     arrays.append(zarray)
@@ -363,15 +377,25 @@ class TiffBackend(ArrayBackend):
                 raise NotImplementedError(
                     "Tiff viewing is not supported with compression enabled."
                 )
+
+            base_shape = tuple(
+                d.count if d.count is not None else 0 for d in storage_dims
+            )
             store = LiveTiffStore(
                 writer_thread=thread,
                 file_path=path,
-                shape=tuple(d.count or 1000 for d in storage_dims),
+                shape=base_shape,
                 dtype=self._dtype,
                 chunks=tuple(1 for _ in storage_dims[:-2]) + self._frame_shape,
                 fill_value=0,
+                unbounded=is_unbounded,
             )
-            arrays.append(zarr.open(store, mode="r"))
+            if is_unbounded:
+                from ome_writers._backends._live_tiff_store import _LiveTiffArray
+
+                arrays.append(_LiveTiffArray(store))
+            else:
+                arrays.append(zarr.open(store, mode="r"))
 
         return arrays
 
