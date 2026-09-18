@@ -103,19 +103,6 @@ jobs:
             python-version: "3.14"
             platform: ubuntu-latest
             resolution: highest
-          # 3.15: tensorstore & acquire-zarr don't have wheels yet
-          - group: tifffile
-            python-version: "3.15"
-            platform: ubuntu-latest
-            resolution: highest
-          - group: zarr-python
-            python-version: "3.15"
-            platform: ubuntu-latest
-            resolution: highest
-          - group: zarrs-python
-            python-version: "3.15"
-            platform: ubuntu-latest
-            resolution: highest
           # this exercises the scripts in the tools dir
           - group: dev
             python-version: "3.13"
