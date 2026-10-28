@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from itertools import count
 from pathlib import Path as PathlibPath
 from typing import Any
 
@@ -21,12 +23,14 @@ from ome_writers import (
 
 try:
     import ome_types
+    import tifffile
     from ome_types import from_tiff, from_xml
 except ImportError:
     pytest.skip("ome_types not installed", allow_module_level=True)
 
 from pathlib import Path
 
+from ome_writers._backends import _tifffile
 from ome_writers._backends._ome_xml import MultiFileMetadata, prepare_metadata
 
 
@@ -475,77 +479,6 @@ def test_frame_metadata_plane_keys_only(tmp_path: Path, tiff_backend: str) -> No
         assert len(plane.annotation_refs) == 0
 
 
-def test_frame_metadata_multiposition(tmp_path: Path, tiff_backend: str) -> None:
-    """Test frame_metadata is position-specific for multi-position."""
-    root = tmp_path / "multipos.ome.tiff"
-    settings = AcquisitionSettings(
-        root_path=root,
-        dimensions=[
-            Dimension(name="p", type="position", coords=["Pos0", "Pos1"]),
-            Dimension(name="t", count=2, type="time"),
-            Dimension(name="y", count=16, type="space"),
-            Dimension(name="x", count=16, type="space"),
-        ],
-        dtype="uint16",
-        overwrite=True,
-        format=tiff_backend,
-    )
-
-    # Write frames with position-specific metadata
-    with create_stream(settings) as stream:
-        for p_name in ["Pos0", "Pos1"]:
-            for t in range(2):
-                frame = np.random.randint(0, 1000, (16, 16), dtype=np.uint16)
-                metadata = {
-                    "delta_t": t * 1.0,
-                    "position_name": p_name,
-                    "frame_number": t,
-                }
-                stream.append(frame, frame_metadata=metadata)
-
-    # Verify each position file has its own frame_metadata
-    # Multi-position TIFFs are now in subdirectory
-    multipos_dir = tmp_path / "multipos"
-    for pos_idx, pos_name in enumerate(["Pos0", "Pos1"]):
-        pos_file = multipos_dir / f"multipos_p{pos_idx:03d}.ome.tiff"
-        ome_obj = from_tiff(str(pos_file))
-
-        # Get this position's image
-        image = ome_obj.images[pos_idx]
-        planes = image.pixels.planes
-
-        # Each position should have 2 planes
-        assert len(planes) == 2
-
-        # Verify Plane attributes
-        assert planes[0].delta_t == 0.0
-        assert planes[1].delta_t == 1.0
-
-        # Get MapAnnotations for this position
-        structured_annots = ome_obj.structured_annotations
-        assert structured_annots is not None
-        map_annots = structured_annots.map_annotations
-        # NOTE!!
-        # this is actually a bug... there should be 4 total annotations,
-        # but we're not currently updating the "master" OME-XML correctly
-        # when writing multi-position files. we update each one differently.
-        # it's interesting: it might kinda be ok... you only get the structured
-        # annotations associated with the position you read...
-        # but not sure it's spec-compliant. for now, just test what we have.
-        assert len(map_annots) == 2
-
-        # Verify metadata is position-specific
-        for frame_idx, annot in enumerate(map_annots):
-            annot_dict = {m.k: m.value for m in annot.value.ms}
-            assert annot_dict["position_name"] == pos_name
-            assert annot_dict["frame_number"] == str(frame_idx)
-
-        # Verify AnnotationRefs link Planes to MapAnnotations
-        for frame_idx, plane in enumerate(planes):
-            assert len(plane.annotation_refs) == 1
-            assert plane.annotation_refs[0].id == map_annots[frame_idx].id
-
-
 # =============================================================================
 # Test metadata modes
 # =============================================================================
@@ -592,6 +525,12 @@ def _write_with_mode(
     return settings
 
 
+def _read_description(path: Path) -> str | None:
+    """Return the OME-XML of a TIFF file, or None if it has no frames."""
+    with tifffile.TiffFile(path) as tf:
+        return tf.pages.first.description if len(tf.pages) else None
+
+
 def _get_full_ome(settings: AcquisitionSettings) -> ome_types.OME:
     """Get OME model with full metadata."""
     # Determine file structure from settings
@@ -618,9 +557,17 @@ def _get_full_ome(settings: AcquisitionSettings) -> ome_types.OME:
         master = next(f for f in output_path.glob("*_p000.ome.tiff"))
         return from_tiff(str(master))
     else:  # metadata_mode == MultiFileMetadata.REDUNDANT
-        # Any TIFF file has full metadata
-        any_file = next(output_path.glob("*.ome.tiff"))
-        return from_tiff(str(any_file))
+        # Every TIFF file with frames has the same full metadata (but its own UUID)
+        first, *others = [
+            ome_types.from_xml(xml)
+            for f in sorted(output_path.glob("*.ome.tiff"))
+            if (xml := _read_description(f))
+        ]
+        for other in others:
+            assert other.model_dump(exclude={"uuid"}) == first.model_dump(
+                exclude={"uuid"}
+            )
+        return first
 
 
 @pytest.mark.parametrize("mode", MULTI_FILE_MODES)
@@ -654,13 +601,30 @@ def test_basic_multiposition(tmp_path: Path, mode: MultiFileMetadata) -> None:
 
 
 @pytest.mark.parametrize("mode", MULTI_FILE_MODES)
-def test_unbounded_multiposition_sizes(tmp_path: Path, mode: MultiFileMetadata) -> None:
-    """Every position's Image gets the actual number of frames written."""
+@pytest.mark.parametrize(
+    ("t_count", "n_frames", "size_t", "plane_count"),
+    [
+        (None, 12, [3, 3], [6, 6]),  # 3 complete timepoints
+        (None, 7, [2, 2], [4, 3]),  # stopped partway through a timepoint
+        (None, 1, [1, 1], [1, 0]),  # stopped before Pos1 got any frame
+        (5, 7, [2, 2], [4, 3]),  # bounded, but stopped early
+    ],
+)
+def test_multiposition_frames_written(
+    tmp_path: Path,
+    mode: MultiFileMetadata,
+    t_count: int | None,
+    n_frames: int,
+    size_t: list[int],
+    plane_count: list[int],
+) -> None:
+    """Every position's Image records the frames written to its own file."""
     settings = AcquisitionSettings(
         root_path=tmp_path / "test.ome.tiff",
         dimensions=[
-            Dimension(name="t", count=None, type="time"),
+            Dimension(name="t", count=t_count, type="time"),
             Dimension(name="p", type="position", coords=["Pos0", "Pos1"]),
+            Dimension(name="c", count=2, type="channel"),
             Dimension(name="y", count=16, type="space"),
             Dimension(name="x", count=16, type="space"),
         ],
@@ -669,13 +633,126 @@ def test_unbounded_multiposition_sizes(tmp_path: Path, mode: MultiFileMetadata) 
         format={"name": "ome-tiff", "multi_file_metadata": mode.value},
     )
     with create_stream(settings) as stream:
-        for _t in range(3):
-            for _p in range(2):
-                stream.append(np.zeros((16, 16), dtype="uint16"))
+        for _ in range(n_frames):
+            stream.append(np.zeros((16, 16), dtype="uint16"))
 
     ome = _get_full_ome(settings)
-    assert [img.pixels.size_t for img in ome.images] == [3, 3]
-    assert [img.pixels.tiff_data_blocks[0].plane_count for img in ome.images] == [3, 3]
+    assert [img.pixels.size_t for img in ome.images] == size_t
+    assert [img.pixels.tiff_data_blocks[0].plane_count for img in ome.images] == (
+        plane_count
+    )
+
+
+def test_finalize_waits_for_slow_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A writer still draining its queue is waited on, beyond the stall timeout."""
+    monkeypatch.setattr(_tifffile, "WRITER_STALL_TIMEOUT", 0.4)
+    write = tifffile.TiffWriter.write
+
+    def slow_write(self: tifffile.TiffWriter, *args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.02)
+        return write(self, *args, **kwargs)
+
+    monkeypatch.setattr(tifffile.TiffWriter, "write", slow_write)
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "test.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=None, type="time"),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+    )
+    # the writer needs ~0.8 s to drain its queue when the stream is closed
+    with create_stream(settings) as stream:
+        for _ in range(40):
+            stream.append(np.zeros((16, 16), dtype="uint16"))
+
+    assert from_tiff(settings.output_path).images[0].pixels.size_t == 40
+
+
+def test_finalize_abandons_stalled_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A writer that stops writing frames makes close() raise, instead of hang."""
+    monkeypatch.setattr(_tifffile, "WRITER_STALL_TIMEOUT", 0.1)
+    resume = threading.Event()
+    write = tifffile.TiffWriter.write
+    pos1_writes = count()
+
+    def stalling_write(self: tifffile.TiffWriter, *args: Any, **kwargs: Any) -> Any:
+        if self.filehandle.name.endswith("_p001.ome.tiff") and next(pos1_writes):
+            resume.wait()  # Pos1 stalls after its first frame
+        return write(self, *args, **kwargs)
+
+    monkeypatch.setattr(tifffile.TiffWriter, "write", stalling_write)
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "test.ome.tiff",
+        dimensions=[
+            Dimension(name="t", count=2, type="time"),
+            Dimension(name="p", type="position", coords=["Pos0", "Pos1"]),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+        format={"name": "ome-tiff", "multi_file_metadata": "redundant"},
+    )
+    stream = create_stream(settings)
+    try:
+        for _ in range(4):
+            stream.append(np.zeros((16, 16), dtype="uint16"))
+        with pytest.raises(TimeoutError, match=r"test_p001\.ome\.tiff"):
+            stream.close()
+    finally:
+        resume.set()
+    for thread in threading.enumerate():
+        if thread.name.startswith("TiffWriterThread"):
+            thread.join()
+
+    # metadata of the finished writer is still written, with the frames known to be
+    # written by the stalled one, whose open file is left with its initial metadata
+    pos0, pos1 = sorted(Path(settings.output_path).glob("*.ome.tiff"))
+    for path, plane_count in [(pos0, [2, 1]), (pos1, [2, 2])]:
+        images = from_tiff(path).images
+        assert [i.pixels.tiff_data_blocks[0].plane_count for i in images] == plane_count
+    with tifffile.TiffFile(pos1) as tf:
+        assert len(tf.pages) == 2
+
+
+@pytest.mark.parametrize("mode", MULTI_FILE_MODES)
+def test_frame_metadata_multiposition(tmp_path: Path, mode: MultiFileMetadata) -> None:
+    """The full OME metadata gets the frame_metadata of every position."""
+    settings = AcquisitionSettings(
+        root_path=tmp_path / "multipos.ome.tiff",
+        dimensions=[
+            Dimension(name="p", type="position", coords=["Pos0", "Pos1"]),
+            Dimension(name="t", count=2, type="time"),
+            Dimension(name="y", count=16, type="space"),
+            Dimension(name="x", count=16, type="space"),
+        ],
+        dtype="uint16",
+        overwrite=True,
+        format={"name": "ome-tiff", "multi_file_metadata": mode.value},
+    )
+    with create_stream(settings) as stream:
+        for p_name in ["Pos0", "Pos1"]:
+            for t in range(2):
+                metadata = {"delta_t": t * 1.0, "position_name": p_name, "frame": t}
+                stream.append(np.zeros((16, 16), np.uint16), frame_metadata=metadata)
+
+    ome = _get_full_ome(settings)
+    assert ome.structured_annotations is not None
+    annotations = {a.id: a for a in ome.structured_annotations.map_annotations}
+    assert len(annotations) == 4
+    for image, p_name in zip(ome.images, ["Pos0", "Pos1"], strict=True):
+        planes = image.pixels.planes
+        assert [plane.delta_t for plane in planes] == [0.0, 1.0]
+        # each Plane links to the MapAnnotation of its own frame
+        for t, plane in enumerate(planes):
+            (ref,) = plane.annotation_refs
+            extras = {m.k: m.value for m in annotations[ref.id].value.ms}
+            assert extras == {"position_name": p_name, "frame": str(t)}
 
 
 @pytest.mark.parametrize("mode", MULTI_FILE_MODES)
